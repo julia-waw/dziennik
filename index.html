@@ -180,6 +180,12 @@ const FONT_R="AAEAAAAPAIAAAwBwR0RFRgLDBAAAAFRgAAAAIkdQT1NEdkx1AABUhAAAACBHU1VCJ6
 const GROUPS={L:'Laktoza',N:'Nabiał',J:'Jajka',G:'Gluten',F:'FODMAP',T:'Tłuste',O:'Ostre',S:'Smażone',A:'Alkohol',K:'Kofeina',X:'Słodziki',R:'Strączki'};
 const SYM={wzdecia:'Wzdęcia',bol:'Ból brzucha',biegunka:'Biegunka',zaparcie:'Zaparcie',nudnosci:'Nudności',gazy:'Gazy',odbijanie:'Odbijanie',pelnosc:'Uczucie pełności',refluks:'Refluks'};
 const AMT={1:'mało',2:'średnio',3:'dużo'};
+const DURS=[['1','do 1 h',.5],['3','1–3 h',2],['6','3–6 h',4.5],['eod','do końca dnia',null]];
+function durEnd(t,k){const d=DURS.find(x=>x[0]===k);if(!d)return null;return d[2]==null?Math.max(t+H,startOfDay(t)+DAY-60e3):t+d[2]*H}
+const isEpisode=s=>!s.cont;
+function isOngoing(s){const now=Date.now();return isEpisode(s)&&s.end==null&&dayKey(s.t)===dayKey(now)&&now-s.t<16*H}
+function fmtDur(ms){const h=ms/H;return h<1?Math.max(5,Math.round(h*60/5)*5)+' min':(Math.round(h*2)/2).toFixed(1).replace('.0','').replace('.',',')+' h'}
+function peakSev(s){return Math.max(s.sev,...S.symptoms.filter(x=>x.cont===s.id).map(x=>x.sev))}
 const ACT=['brak','lekka','umiarkowana','intensywna'];
 const FOODS_RAW=`płatki owsiane|G
 chleb pszenny|GF
@@ -501,7 +507,7 @@ const UI={tab:'dzis',day:dayKey(Date.now()),sheet:null,d:null,undo:null};
 
 /* ---------- dane przykładowe ---------- */
 function makeSample(seed){
-  let a=seed||12;const rnd=()=>{a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296};
+  let a=seed||65;const rnd=()=>{a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296};
   const pick=arr=>arr[Math.floor(rnd()*arr.length)];
   const st=blank();st.sample=true;
   const tagsOf=n=>(BUILTIN.find(f=>f.name===n)||{tags:[]}).tags;
@@ -511,7 +517,7 @@ function makeSample(seed){
   const lo=[['burger','frytki'],['sushi'],['kebab'],['pho'],['falafel wrap'],['curry z ryżem'],['poke bowl'],['sałatka z kurczakiem'],['makaron z sosem pomidorowym']];
   const dn=[['Kasza z pieczarkami',['kasza gryczana','pieczarki','cebula','oliwa z oliwek']],['Kanapki z szynką',['chleb żytni','szynka','pomidor','sałata']],['Zupa pomidorowa',['zupa pomidorowa','ryż biały']],['Ryż z warzywami',['ryż biały','cukinia','papryka czerwona','marchew','oliwa z oliwek']],['Dorsz z ziemniakami',['dorsz','ziemniaki','marchew']],['Kurczak z ryżem',['pierś z kurczaka','ryż biały','marchew','oliwa z oliwek']]];
   const today0=startOfDay(Date.now()),N=42;
-  const addSym=(t,type,sev)=>{if(t<Date.now())st.symptoms.push({id:uid(),t:Math.round(t),type,sev})};
+  const addSym=(t,type,sev)=>{if(t>=Date.now())return;const s={id:uid(),t:Math.round(t),type,sev};const r=rnd();if(r<.75){const k=pick(['1','1','3','3','3','6']);s.end=durEnd(s.t,k);s.endApprox=true;s.durKey=k;if(s.end>Date.now())delete s.end,delete s.endApprox,delete s.durKey}st.symptoms.push(s)};
   for(let i=N;i>=0;i--){
     const d0=today0-i*DAY,di=N-i;
     const stress=pick([1,2,2,2,3,3,3,4,4,5]),period=(di>=8&&di<=12)||(di>=36&&di<=40);
@@ -566,7 +572,10 @@ let anCache=null,anRev=-1;
 function analysis(){if(anRev!==rev){anCache=analyze(S);anRev=rev}return anCache}
 function analyze(st){
   const now=Date.now(),min=st.settings.sevMin||4;
-  const syms=st.symptoms.filter(s=>s.sev>=min).sort((a,b)=>a.t-b.t);
+  const peak={};st.symptoms.forEach(s=>{const k=s.cont||s.id;peak[k]=Math.max(peak[k]||0,s.sev)});
+  const syms=st.symptoms.filter(s=>!s.cont&&peak[s.id]>=min).sort((a,b)=>a.t-b.t);
+  const spanEnd=s=>s.end!=null?s.end:(isOngoing(s)?now:s.t+H);
+  const during=t=>syms.some(s=>s.t<t&&spanEnd(s)>t);
   const meals=[...st.meals].sort((a,b)=>a.t-b.t);
   const inWin=(t0,t1)=>syms.filter(s=>s.t>=t0&&s.t<=t1);
   const sets=meals.map(m=>{const p=new Set(),g=new Set();m.items.forEach(i=>{p.add(i.f);food(i.f).tags.forEach(x=>g.add(x))});return {p,g}});
@@ -575,16 +584,16 @@ function analyze(st){
     const expT=[];meals.forEach((m,i)=>{if(has(i))expT.push(m.t)});
     const near=(t0,t1)=>expT.some(t=>t>=t0&&t<=t1);
     const wins=WINS.map(w=>{
-      let a=0,b=0,c=0,d=0;const types={};
+      let a=0,b=0,c=0,d=0;const types={},durs=[],durSeen=new Set();
       const add=(t,wt,exp)=>{
-        if(t+w.to*H>now)return;
+        if(t+w.to*H>now||during(t))return;
         const ss=inWin(t+w.from*H,t+w.to*H);
-        if(exp){if(ss.length){a+=wt;new Set(ss.map(s=>s.type)).forEach(ty=>types[ty]=(types[ty]||0)+1)}else b+=wt}
+        if(exp){if(ss.length){a+=wt;new Set(ss.map(s=>s.type)).forEach(ty=>types[ty]=(types[ty]||0)+1);ss.forEach(s=>{if(s.end!=null&&!durSeen.has(s.id)){durSeen.add(s.id);durs.push(s.end-s.t)}})}else b+=wt}
         else{if(ss.length)c+=wt;else d+=wt}
       };
       if(w.k==='A')meals.forEach((m,i)=>{const wt=m.out?.5:1;if(has(i))add(m.t,wt,true);else if(!near(m.t-w.to*H,m.t+w.to*H))add(m.t,wt,false)});
       else for(const k in byDay){const idx=byDay[k],e=idx.find(has);if(e!==undefined)add(meals[e].t,meals[e].out?.5:1,true);else{const t=meals[idx[0]].t;if(!near(t-w.to*H,t+w.to*H))add(t,1,false)}}
-      const g=grade(a,b,c,d,w.k!=='A');g.w=w;g.types=types;return g;
+      const g=grade(a,b,c,d,w.k!=='A');g.w=w;g.types=types;g.durs=durs;return g;
     });
     let best=wins[0];for(const g of wins)if(RANK[g.conf]>RANK[best.conf]||(RANK[g.conf]===RANK[best.conf]&&RANK[g.conf]>0&&g.diff>best.diff))best=g;
     let status=best.conf;
@@ -607,9 +616,10 @@ function analyze(st){
   const absent=ents.filter(e=>e.type==='g'&&(e.n===0||now-e.last>21*DAY&&e.n<5));
   const dayKeys=Object.keys(byDay).sort();
   const symDays=new Set(syms.map(s=>dayKey(s.t)));
-  const meta={days:dayKeys.length,from:dayKeys.length?keyToDate(dayKeys[0]).getTime():now,to:dayKeys.length?keyToDate(dayKeys[dayKeys.length-1]).getTime():now,meals:meals.length,symptoms:st.symptoms.length,counted:syms.length,symDays:[...symDays].filter(k=>byDay[k]).length,min,outShare:meals.length?meals.filter(m=>m.out).length/meals.length:0};
+  const meta={days:dayKeys.length,from:dayKeys.length?keyToDate(dayKeys[0]).getTime():now,to:dayKeys.length?keyToDate(dayKeys[dayKeys.length-1]).getTime():now,meals:meals.length,symptoms:st.symptoms.filter(s=>!s.cont).length,counted:syms.length,symDays:[...symDays].filter(k=>byDay[k]).length,min,outShare:meals.length?meals.filter(m=>m.out).length/meals.length:0};
   meta.enough=meta.days>=14&&meta.counted>=10;
-  const bySym=Object.keys(SYM).map(k=>{const l=st.symptoms.filter(s=>s.type===k);return {k,name:SYM[k],n:l.length,avg:l.length?l.reduce((s,x)=>s+x.sev,0)/l.length:0}}).filter(x=>x.n).sort((x,y)=>y.n-x.n);
+  const bySym=Object.keys(SYM).map(k=>{const l=st.symptoms.filter(s=>s.type===k&&!s.cont);const dl=l.filter(s=>s.end!=null).map(s=>s.end-s.t);return {k,name:SYM[k],n:l.length,avg:l.length?l.reduce((s,x)=>s+peak[x.id],0)/l.length:0,dur:dl.length?dl.reduce((a,b)=>a+b,0)/dl.length:null,nd:dl.length}}).filter(x=>x.n).sort((x,y)=>y.n-x.n);
+  meta.withEnd=st.symptoms.filter(s=>!s.cont&&s.end!=null).length;meta.episodes=st.symptoms.filter(s=>!s.cont).length;
   const fdefs=[['Krótki sen (poniżej 6 h)',d=>d.sleep!=null?d.sleep<6:null],['Wysoki stres (4–5)',d=>d.stress!=null?d.stress>=4:null],['Miesiączka',d=>d.period!=null?!!d.period:null],['Aktywność umiarkowana lub intensywna',d=>d.activity!=null?d.activity>=2:null]];
   const factors=fdefs.map(([name,fn])=>{let a=0,b=0,c=0,d=0;for(const k in st.days){const v=fn(st.days[k]);if(v===null)continue;const s=symDays.has(k);if(v){s?a++:b++}else{s?c++:d++}}return {name,...grade(a,b,c,d)}});
   return {ents,suspects,clear,few,nocontrol,absent,meta,bySym,factors};
@@ -670,17 +680,25 @@ function vToday(){
   else h+=`<ul class="tl">`+list.map(e=>{
     if(e.k==='m'){const m=e.m,names=m.items.map(i=>food(i.f).name+(i.a!==2?` (${AMT[i.a]})`:''));
       return `<li data-act="editMeal" data-id="${m.id}"><time>${hm(m.t)}</time><div><div class="t1">${esc(m.name||cap(names[0]||'Posiłek'))}</div><div class="t2">${esc(m.name?names.join(', '):names.slice(1).join(', '))}</div></div>${m.out?'<span class="tag">na mieście</span>':'<span></span>'}</li>`}
-    const s=e.s,c=s.sev>=7?'hi':s.sev>=4?'':'lo';
-    return `<li class="sym s-${c}" data-act="editSym" data-id="${s.id}"><time>${hm(s.t)}</time><div><div class="t1">${SYM[s.type]}</div></div><span class="sev ${c} num">${s.sev}</span></li>`}).join('')+`</ul>`;
+    const s=e.s,c=s.sev>=7?'hi':s.sev>=4?'':'lo',par=s.cont?S.symptoms.find(x=>x.id===s.cont):null,ep=par||s;
+    const latest=!S.symptoms.some(x=>(x.cont===ep.id||x.id===ep.id)&&x.t>s.t);
+    let sub='';
+    if(par)sub=`ciąg dalszy z ${hm(par.t)}${par.end!=null&&latest?` · minęło ${hm(par.end)}`:''}`;
+    else if(s.end!=null)sub=`${s.endApprox?'ok. ':''}${fmtDur(s.end-s.t)} · ${s.endApprox?'':'minęło '+hm(s.end)}`.replace(/ · $/,'');
+    else if(isOngoing(s))sub='trwa';
+    else sub='czas trwania nieznany';
+    const btn=latest&&isOngoing(ep)?`<button class="btn small" data-act="endSym" data-id="${ep.id}">Minęło</button>`:'';
+    return `<li class="sym s-${c}" data-act="editSym" data-id="${s.id}"><time>${hm(s.t)}</time><div class="stack" style="gap:6px"><div><div class="t1">${SYM[s.type]}</div><div class="t2">${sub}</div></div>${btn?`<div>${btn}</div>`:''}</div><span class="sev ${c} num">${s.sev}</span></li>`}).join('')+`</ul>`;
   return h;
 }
+const avgDur=l=>l&&l.length>=3?fmtDur(l.reduce((a,b)=>a+b,0)/l.length):null;
 function susCard(e){
   const b=e.best,c=CONF[e.status];
   const kind=e.type==='g'?'Grupa produktów':'Produkt'+(e.tags&&e.tags.length?' · '+e.tags.map(t=>GROUPS[t]).join(', '):'');
   return `<article class="card stack"><div class="row between"><h3>${esc(e.name)}</h3><span class="pill ${e.status}"><i>${c[1]}</i>${c[0]}</span></div><small>${kind}</small>
   <div class="cmp"><div><b class="num">${pct(b.p1)}</b> przypadków z objawem po zjedzeniu <small class="num">(${fmtN(b.a)} z ${fmtN(b.n1)})</small></div><div class="bar"><span style="width:${Math.round(b.p1*100)}%"></span></div></div>
   <div class="cmp ctrl"><div><b class="num">${pct(b.p0)}</b> w okresach bez <small class="num">(${fmtN(b.c)} z ${fmtN(b.n0)})</small></div><div class="bar"><span style="width:${Math.round(b.p0*100)}%"></span></div></div>
-  <small>Okno: ${b.w.label} po jedzeniu${e.top?' · najczęściej: '+SYM[e.top].toLowerCase():''}</small>${e.withOthers&&e.withOthers.length?`<small>Zwykle jedzone razem z: ${esc(e.withOthers.join(', ').toLowerCase())}. Dziennik nie rozróżni, które z nich szkodzi.</small>`:''}</article>`;
+  <small>Okno: ${b.w.label} po jedzeniu${e.top?' · najczęściej: '+SYM[e.top].toLowerCase():''}${avgDur(b.durs)?' · trwały średnio '+avgDur(b.durs):''}</small>${e.withOthers&&e.withOthers.length?`<small>Zwykle jedzone razem z: ${esc(e.withOthers.join(', ').toLowerCase())}. Dziennik nie rozróżni, które z nich szkodzi.</small>`:''}</article>`;
 }
 function vReport(){
   const an=analysis(),m=an.meta;
@@ -697,12 +715,13 @@ function vReport(){
   if(an.clear.length)h+=`<details class="card"><summary>Bez wyraźnego związku (${an.clear.length})</summary><div class="stack"><small>Wystarczająco dużo obserwacji i brak różnicy. To nie dowód, że produkt jest bezpieczny, ale na razie nic na niego nie wskazuje.</small><ul class="plain">${an.clear.map(e=>li(e,`${pct(e.best.p1)} vs ${pct(e.best.p0)} · ${e.n}×`)).join('')}</ul></div></details>`;
   if(an.absent.length)h+=`<details class="card"><summary>Grupy bez danych (${an.absent.length})</summary><div class="stack"><small>Nie jesz ich albo jesz bardzo rzadko, więc dziennik nie może ich ocenić.</small><ul class="plain">${an.absent.map(e=>li(e,(S.settings.excluded||[]).includes(e.key)?'wykluczone':e.n+'×')).join('')}</ul></div></details>`;
   h+=`<div class="sec-h"><h2>Czynniki dodatkowe</h2></div><div class="card"><ul class="plain">${an.factors.map(f=>`<li><span>${f.name}<br><small>${f.conf==='few'?`za mało dni do porównania (${f.n1} i ${f.n0})`:`dni z objawami: <b class="num">${pct(f.p1)}</b> (${f.a} z ${f.n1}) vs ${pct(f.p0)} (${f.c} z ${f.n0})`}</small></span>${CONF[f.conf]?`<span class="pill ${f.conf}"><i>${CONF[f.conf][1]}</i>${CONF[f.conf][0]}</span>`:'<span class="muted">'+(f.conf==='few'?'':'bez związku')+'</span>'}</li>`).join('')}</ul></div>`;
-  if(an.bySym.length)h+=`<div class="sec-h"><h2>Objawy</h2></div><div class="card"><ul class="plain">${an.bySym.map(s=>`<li><span>${s.name}</span><span class="muted num">${s.n}× · średnio ${s.avg.toFixed(1).replace('.',',')}</span></li>`).join('')}</ul></div>`;
+  if(an.bySym.length)h+=`<div class="sec-h"><h2>Objawy</h2></div><div class="card"><ul class="plain">${an.bySym.map(s=>`<li><span>${s.name}${s.dur!=null?`<br><small>trwa średnio ${fmtDur(s.dur)} (z ${s.nd} ${s.nd===1?'wpisu':'wpisów'})</small>`:''}</span><span class="muted num">${s.n}× · nasilenie ${s.avg.toFixed(1).replace('.',',')}</span></li>`).join('')}</ul></div>`;
   h+=`<details class="card"><summary>Jak czytać ten raport</summary><div class="prose">
   <p><b>Co porównuję.</b> Dla każdego produktu i grupy liczę, jak często po zjedzeniu pojawiał się objaw o nasileniu ${m.min}+, i zestawiam to z okresami, w których tego produktu nie było.</p>
   <p><b>Okna czasowe.</b> Sprawdzam trzy okna: 30 min–6 h, 6–24 h i 24–72 h. Pokazuję to, w którym różnica jest najwyraźniejsza. Dwa pierwsze są najbardziej wiarygodne.</p>
   <p><b>Pewność.</b> Niska: co najmniej 5 obserwacji i różnica 15+ punktów, ale wynik mógł jeszcze wyjść przypadkiem. Średnia: 10+ obserwacji i różnica co najmniej 15 punktów procentowych. Wysoka: 20+ obserwacji, różnica co najmniej 20 punktów i wynik mało prawdopodobny jako przypadek (dokładny test Fishera, p&nbsp;&lt;&nbsp;0,01). Dla okien powyżej 6 h progi są ostrzejsze.</p>
   <p><b>Posiłki na mieście</b> liczą się jako pół obserwacji, bo ich skład jest niepewny.</p>
+  <p><b>Czas trwania.</b> Posiłki zjedzone w trakcie trwającego objawu nie wchodzą do porównania, bo nie da się ocenić, czy coś wywołały. Gdy nie wiadomo, jak długo objaw trwał, przyjmuję 1 godzinę. Dopisane nasilenie tego samego objawu nie liczy się jako nowy początek. Do analizy idzie najwyższe nasilenie z całego epizodu.</p>
   <p><b>Ograniczenia.</b> To są współwystąpienia, nie dowód przyczyny. Produkty jedzone razem (np. cebula i czosnek) trudno rozdzielić. Przy wielu sprawdzanych produktach część wyników pojawia się przypadkiem. Przypisanie produktów do grup (zwłaszcza FODMAP) jest przybliżone. Podejrzenie potwierdza dopiero test eliminacji i ponownego wprowadzenia.</p></div></details>`;
   return h;
 }
@@ -771,11 +790,21 @@ function sheetSym(){const d=UI.d,edit=!!d.id;
   return `<div class="row between"><h2>${edit?'Edytuj objaw':'Objaw'}</h2><button class="btn small ghost" data-act="closeSheet">Zamknij</button></div>
   <div class="tiles">${Object.entries(SYM).map(([k,n])=>`<button class="${d.type===k?'on':''}" data-act="symType" data-k="${k}">${n}</button>`).join('')}</div>
   <div class="field"><label for="sev">Nasilenie (1 ledwo odczuwalne, 10 nie do wytrzymania)</label><div class="sevrow"><input type="range" id="sev" min="1" max="10" step="1" value="${d.sev}"><output id="sevOut" for="sev" class="num">${d.sev}</output></div></div>
+  ${contHtml()}
   ${timeRow(d.t)}
+  ${d.cont?'':durHtml()}
   <div class="row">${edit?`<button class="btn danger" data-act="delSym">Usuń</button>`:''}<button class="btn primary grow" id="saveSym" data-act="saveSym" ${d.type?'':'disabled'}>Zapisz objaw</button></div>`}
+function ongoingOf(type,exceptId){return S.symptoms.filter(s=>s.type===type&&s.id!==exceptId&&isOngoing(s)).sort((a,b)=>b.t-a.t)[0]}
+function contHtml(){const d=UI.d;if(d.id){const par=d.cont&&S.symptoms.find(x=>x.id===d.cont);return par?`<div class="banner info"><span>Ciąg dalszy objawu z ${hm(par.t)}.</span></div>`:''}
+  const o=d.type&&ongoingOf(d.type);if(!o)return '';
+  return `<div class="banner info" id="contBox"><span><b>To te same ${esc(SYM[o.type].toLowerCase())} co o ${hm(o.t)}?</b></span><div class="seg wide"><button class="${d.cont===o.id?'on':''}" data-act="setCont" data-v="${o.id}">Tak, nadal trwają</button><button class="${d.cont===o.id?'':'on'}" data-act="setCont" data-v="">Nie, nowy objaw</button></div>${d.cont===o.id?'<small>Zapiszę to jako nasilenie, a nie nowy początek.</small>':'<small>Poprzedni objaw oznaczę jako zakończony.</small>'}</div>`}
+function durHtml(){const d=UI.d;const k=d.durKey;
+  return `<div class="field"><span class="lbl">Jak długo trwał (opcjonalnie)</span><div class="chips">${[['','nadal trwa / nie wiem'],...DURS.map(x=>[x[0],x[1]])].map(([v,l])=>`<button class="chip ${(k||'')===v&&!d.endExact?'on':''}" data-act="setDur" data-v="${v}">${l}</button>`).join('')}</div><div class="row"><small>albo minęło o</small><input type="time" id="endIn" value="${d.end!=null&&d.endExact?hm(d.end):''}" data-chg="endTime" style="width:auto" aria-label="Godzina końca"></div></div>`}
 function sheetDay(){const d=UI.d;const caf=S.meals.filter(m=>dayKey(m.t)===UI.day).flatMap(m=>m.items).filter(i=>food(i.f).tags.includes('K')).map(i=>food(i.f).name);
   const seg=(act,val,opts)=>`<div class="seg wide">${opts.map(([v,l])=>`<button class="${val===v?'on':''}" data-act="${act}" data-v="${v}">${l}</button>`).join('')}</div>`;
-  return `<div class="row between"><h2>Podsumowanie dnia</h2><button class="btn small ghost" data-act="closeSheet">Zamknij</button></div><small>${cap(dLong(keyToDate(UI.day)))}. Wszystkie pola są opcjonalne.</small>
+  const open=S.symptoms.filter(s=>dayKey(s.t)===UI.day&&isEpisode(s)&&s.end==null).sort((a,b)=>a.t-b.t);
+  const durQ=open.length?`<div class="field"><span class="lbl">Jak długo trwały objawy?</span>${open.map(s=>`<div class="stack" style="gap:6px"><small><b>${SYM[s.type]}</b> z ${hm(s.t)}</small><div class="chips">${DURS.map(([v,l])=>`<button class="chip ${(d.durs||{})[s.id]===v?'on':''}" data-act="dayDur" data-id="${s.id}" data-v="${v}">${l}</button>`).join('')}</div></div>`).join('')}</div>`:'';
+  return `<div class="row between"><h2>Podsumowanie dnia</h2><button class="btn small ghost" data-act="closeSheet">Zamknij</button></div><small>${cap(dLong(keyToDate(UI.day)))}. Wszystkie pola są opcjonalne.</small>${durQ}
   <div class="field"><span class="lbl">Sen ostatniej nocy</span><div class="stepper"><button data-act="sleep" data-v="-0.5" aria-label="Mniej snu">−</button><b class="num">${d.sleep==null?'–':String(d.sleep).replace('.',',')+' h'}</b><button data-act="sleep" data-v="0.5" aria-label="Więcej snu">+</button></div></div>
   <div class="field"><span class="lbl">Stres (1 spokojnie, 5 bardzo duży)</span>${seg('stress',d.stress,[1,2,3,4,5].map(n=>[n,n]))}</div>
   <div class="field"><span class="lbl">Aktywność fizyczna</span>${seg('activity',d.activity,ACT.map((l,i)=>[i,l]))}</div>
@@ -854,18 +883,26 @@ const A={
     if(d.fav){S.favorites.push({id:uid(),name:rec.name||cap(food(rec.items[0].f).name),items:rec.items.map(i=>({...i}))})}
     save();closeSheet();render();toast(d.id?'Zapisano zmiany':'Dodano posiłek')},
   delMeal(){const id=UI.d.id,old=S.meals.find(m=>m.id===id);S.meals=S.meals.filter(m=>m.id!==id);save();closeSheet();render();toast('Usunięto posiłek','Cofnij',()=>{S.meals.push(old);save();render()})},
-  newSym(){UI.sheet='sym';UI.d={t:defTime(),off:0,type:null,sev:5};openSheet(sheetSym())},
-  editSym(el){const s=S.symptoms.find(x=>x.id===el.dataset.id);if(!s)return;UI.sheet='sym';UI.d={...s};openSheet(sheetSym())},
-  symType(el){UI.d.type=el.dataset.k;document.querySelectorAll('#panel .tiles button').forEach(b=>b.classList.toggle('on',b===el));$('#saveSym').disabled=false},
+  newSym(){UI.sheet='sym';UI.d={t:defTime(),off:0,type:null,sev:5,cont:null,end:null,durKey:'',endExact:false};openSheet(sheetSym())},
+  setCont(el){UI.d.cont=el.dataset.v||null;openSheet(sheetSym())},
+  setDur(el){const d=UI.d;d.durKey=el.dataset.v;d.endExact=false;d.end=null;openSheet(sheetSym())},
+  endSym(el){const s=S.symptoms.find(x=>x.id===el.dataset.id);if(!s)return;const prev={end:s.end,endApprox:s.endApprox};s.end=Math.max(Date.now(),s.t+5*60e3,...S.symptoms.filter(x=>x.cont===s.id).map(x=>x.t));s.endApprox=false;save();render();toast(`${SYM[s.type]}: ${fmtDur(s.end-s.t)}`,'Cofnij',()=>{s.end=prev.end;s.endApprox=prev.endApprox;save();render()})},
+  editSym(el){const s=S.symptoms.find(x=>x.id===el.dataset.id);if(!s)return;UI.sheet='sym';UI.d={...s,end:s.end??null,endExact:s.end!=null&&(!s.endApprox||!s.durKey),durKey:s.endApprox?(s.durKey||''):''};openSheet(sheetSym())},
+  symType(el){const d=UI.d;d.type=el.dataset.k;if(!d.id){const o=ongoingOf(d.type);d.cont=o?o.id:null}openSheet(sheetSym())},
   saveSym(){const d=UI.d;if(!d.type)return;const rec={id:d.id||uid(),t:Math.round(d.t),type:d.type,sev:Number(d.sev)};
-    if(d.id)S.symptoms=S.symptoms.map(s=>s.id===d.id?rec:s);else S.symptoms.push(rec);save();closeSheet();render();toast(d.id?'Zapisano zmiany':'Dodano objaw')},
-  delSym(){const id=UI.d.id,old=S.symptoms.find(s=>s.id===id);S.symptoms=S.symptoms.filter(s=>s.id!==id);save();closeSheet();render();toast('Usunięto objaw','Cofnij',()=>{S.symptoms.push(old);save();render()})},
-  daySum(){UI.sheet='day';UI.d={sleep:null,stress:null,activity:null,period:null,...(S.days[UI.day]||{})};openSheet(sheetDay())},
+    if(d.cont){const par=S.symptoms.find(x=>x.id===d.cont);if(par&&par.type===d.type&&par.t<=rec.t)rec.cont=d.cont}
+    if(!rec.cont){if(d.endExact&&d.end!=null&&d.end>rec.t){rec.end=d.end}else if(d.durKey){rec.end=durEnd(rec.t,d.durKey);rec.endApprox=true;rec.durKey=d.durKey}}
+    if(!d.id&&!rec.cont){const o=ongoingOf(rec.type);if(o&&o.t<rec.t){o.end=rec.t;o.endApprox=true}}
+    if(d.id)S.symptoms=S.symptoms.map(s=>s.id===d.id?rec:s);else S.symptoms.push(rec);save();closeSheet();render();toast(d.id?'Zapisano zmiany':rec.cont?'Dodano nasilenie objawu':'Dodano objaw')},
+  delSym(){const id=UI.d.id,old=S.symptoms.find(s=>s.id===id),kids=S.symptoms.filter(s=>s.cont===id);S.symptoms=S.symptoms.filter(s=>s.id!==id&&s.cont!==id);save();closeSheet();render();toast(kids.length?'Usunięto objaw z ciągiem dalszym':'Usunięto objaw','Cofnij',()=>{S.symptoms.push(old,...kids);save();render()})},
+  daySum(){UI.sheet='day';const {durs,...saved}=S.days[UI.day]||{};UI.d={sleep:null,stress:null,activity:null,period:null,...saved,durs:{}};openSheet(sheetDay())},
   sleep(el){const d=UI.d;d.sleep=Math.max(0,Math.min(14,(d.sleep==null?7-Number(el.dataset.v):d.sleep)+Number(el.dataset.v)));openSheet(sheetDay())},
   stress(el){UI.d.stress=Number(el.dataset.v);openSheet(sheetDay())},
   activity(el){UI.d.activity=Number(el.dataset.v);openSheet(sheetDay())},
   period(el){UI.d.period=el.dataset.v==='true';openSheet(sheetDay())},
-  saveDay(){S.days[UI.day]={...UI.d};save();closeSheet();render();toast('Zapisano podsumowanie dnia')},
+  dayDur(el){const d=UI.d;d.durs=d.durs||{};d.durs[el.dataset.id]=d.durs[el.dataset.id]===el.dataset.v?undefined:el.dataset.v;openSheet(sheetDay())},
+  saveDay(){const {durs,...rest}=UI.d;for(const id in (durs||{})){const s=S.symptoms.find(x=>x.id===id);if(s&&durs[id]&&s.end==null){s.end=durEnd(s.t,durs[id]);s.endApprox=true;s.durKey=durs[id]}}
+    S.days[UI.day]=rest;save();closeSheet();render();toast('Zapisano podsumowanie dnia')},
   togExcl(el){const e=S.settings.excluded=S.settings.excluded||[],k=el.dataset.k,i=e.indexOf(k);i<0?e.push(k):e.splice(i,1);save();render()},
   startTest(el){const {out,active}=suggestions(analysis());if(active)return;const s=out[Number(el.dataset.i)];if(!s)return;S.tests.push({id:uid(),kind:s.kind,ent:s.ent,label:s.label,len:s.len,start:startOfDay(Date.now())});save();render();toast('Test rozpoczęty')},
   stopTest(el){UI.pending=el.dataset.id;confirmBox('Zakończyć test?','Wynik zostanie policzony z dotychczasowych dni.','Zakończ','stopTestOk')},
@@ -921,15 +958,15 @@ async function exportPDF(){
     y+=2;
     if(!m.enough){text(`Za mało danych na wnioski: ${m.days} dni z wpisami i ${m.counted} objawów o nasileniu ${m.min}+. Wyniki poniżej są wstępne.`,10,true,[169,107,18]);y+=1}
     text('Jak powstał raport',11,true);
-    text(`Samodzielnie prowadzony dziennik posiłków (ze składnikami) i objawów (nasilenie 1–10). Dla każdego produktu i grupy porównano, jak często objaw o nasileniu ${m.min}+ pojawiał się w oknie czasowym po spożyciu, z częstością w porównywalnych okresach bez tego produktu. Sprawdzono okna 30 min–6 h, 6–24 h i 24–72 h; podano okno z najwyraźniejszą różnicą. Posiłki jedzone poza domem (${pct(m.outShare)} wpisów) liczono jako pół obserwacji. Pewność: niska (5+ obserwacji, różnica ≥ 15 pkt proc., p < 0,10), średnia (10+ obserwacji, różnica ≥ 15 pkt proc., p < 0,05), wysoka (20+ obserwacji, różnica ≥ 20 pkt proc., p < 0,01; dokładny test Fishera, jednostronny). Wyniki to współwystąpienia, bez korekty na wielokrotne porównania; nie dowodzą przyczyny.`,8.5,false,[94,109,105]);
+    text(`Samodzielnie prowadzony dziennik posiłków (ze składnikami) i objawów (nasilenie 1–10). Dla każdego produktu i grupy porównano, jak często objaw o nasileniu ${m.min}+ pojawiał się w oknie czasowym po spożyciu, z częstością w porównywalnych okresach bez tego produktu. Sprawdzono okna 30 min–6 h, 6–24 h i 24–72 h; podano okno z najwyraźniejszą różnicą. Posiłki jedzone poza domem (${pct(m.outShare)} wpisów) liczono jako pół obserwacji. Pominięto posiłki zjedzone w trakcie trwającego objawu (czas trwania podano dla ${m.withEnd} z ${m.episodes} objawów; brak danych liczono jako 1 h); dopisane nasilenia tego samego objawu nie są liczone jako nowy początek. Pewność: niska (5+ obserwacji, różnica ≥ 15 pkt proc., p < 0,10), średnia (10+ obserwacji, różnica ≥ 15 pkt proc., p < 0,05), wysoka (20+ obserwacji, różnica ≥ 20 pkt proc., p < 0,01; dokładny test Fishera, jednostronny). Wyniki to współwystąpienia, bez korekty na wielokrotne porównania; nie dowodzą przyczyny.`,8.5,false,[94,109,105]);
     y+=3;text('Podejrzane produkty i grupy',12,true);
-    if(an.suspects.length)table(['Pozycja','Pewność','Objaw po spożyciu','Bez produktu','Okno','Najczęstszy objaw'],an.suspects.map(e=>[e.name+(e.type==='g'?' (grupa)':''),CONF[e.status][0],`${pct(e.best.p1)} (${fmtN(e.best.a)} z ${fmtN(e.best.n1)})`,`${pct(e.best.p0)} (${fmtN(e.best.c)} z ${fmtN(e.best.n0)})`,e.best.w.label,e.top?SYM[e.top].toLowerCase():'–']),{0:{fontStyle:'bold',cellWidth:42}});
+    if(an.suspects.length)table(['Pozycja','Pewność','Objaw po spożyciu','Bez produktu','Okno','Najczęstszy objaw'],an.suspects.map(e=>[e.name+(e.type==='g'?' (grupa)':''),CONF[e.status][0],`${pct(e.best.p1)} (${fmtN(e.best.a)} z ${fmtN(e.best.n1)})`,`${pct(e.best.p0)} (${fmtN(e.best.c)} z ${fmtN(e.best.n0)})`,e.best.w.label,(e.top?SYM[e.top].toLowerCase():'–')+(avgDur(e.best.durs)?', ok. '+avgDur(e.best.durs):'')]),{0:{fontStyle:'bold',cellWidth:42}});
     else text('Żadna pozycja nie wyróżnia się na tle pozostałych.',9.5);
     if(an.few.length){text('Za mało obserwacji (poniżej 5), bez oceny',11,true);text(an.few.map(e=>`${e.name} (${e.n}×)`).join(', '),8.5,false,[94,109,105]);y+=3}
     if(an.nocontrol.length){text('Jedzone zbyt często, żeby porównać',11,true);text(an.nocontrol.map(e=>`${e.name} (${e.n}×)`).join(', '),8.5,false,[94,109,105]);y+=3}
     if(an.absent.length){text('Grupy wykluczone lub prawie niejedzone (brak danych)',11,true);text(an.absent.map(e=>e.name+((S.settings.excluded||[]).includes(e.key)?' – wykluczone':'')).join(', '),8.5,false,[94,109,105]);y+=3}
     if(an.clear.length){text('Bez wyraźnego związku',11,true);text(an.clear.slice(0,40).map(e=>`${e.name} (${e.n}×)`).join(', '),8.5,false,[94,109,105]);y+=3}
-    if(an.bySym.length){text('Objawy w okresie',12,true);table(['Objaw','Liczba','Średnie nasilenie'],an.bySym.map(s=>[s.name,String(s.n),s.avg.toFixed(1).replace('.',',')]))}
+    if(an.bySym.length){text('Objawy w okresie',12,true);table(['Objaw','Liczba','Średnie nasilenie','Średni czas trwania'],an.bySym.map(s=>[s.name,String(s.n),s.avg.toFixed(1).replace('.',','),s.dur!=null?fmtDur(s.dur)+` (n=${s.nd})`:'–']))}
     text('Czynniki dodatkowe (dni z objawami)',12,true);
     table(['Czynnik','Dni z czynnikiem','Pozostałe dni','Pewność'],an.factors.map(f=>[f.name,f.n1?`${pct(f.p1)} (${f.a} z ${f.n1})`:'–',f.n0?`${pct(f.p0)} (${f.c} z ${f.n0})`:'–',f.conf==='few'?'za mało danych':CONF[f.conf]?CONF[f.conf][0]:'bez związku']));
     const done=S.tests.filter(t=>testInfo(t).done);
@@ -949,6 +986,7 @@ document.addEventListener('input',e=>{const t=e.target;
   else if(t.id==='say'){UI.say=t.value}});
 document.addEventListener('change',e=>{const t=e.target,c=t.dataset&&t.dataset.chg;if(!c)return;
   if(c==='time'&&t.value){const [h,m]=t.value.split(':').map(Number);const base=UI.d.id?startOfDay(UI.d.t):keyToDate(UI.day).getTime();const d=new Date(base);d.setHours(h,m,0,0);UI.d.t=d.getTime();UI.d.off=-1;document.querySelectorAll('#panel [data-act=tOff]').forEach(b=>b.classList.remove('on'))}
+  else if(c==='endTime'&&t.value){const [h,m]=t.value.split(':').map(Number);const d=new Date(UI.d.t);d.setHours(h,m,0,0);let e=d.getTime();if(e<=UI.d.t)e+=DAY;UI.d.end=e;UI.d.endExact=true;UI.d.durKey='';document.querySelectorAll('#panel [data-act=setDur]').forEach(b=>b.classList.remove('on'))}
   else if(c==='out')UI.d.out=t.checked;
   else if(c==='fav')UI.d.fav=t.checked;
   else if(c==='sevMin'){S.settings.sevMin=Number(t.value);save();toast('Zmieniono próg analizy')}});
