@@ -151,6 +151,8 @@ details.card>div{margin-top:10px}
 #toast.show{display:flex}
 #toast button{background:transparent;border:0;color:inherit;font-weight:700;text-decoration:underline;padding:4px}
 textarea{width:100%;min-height:150px;border:1px solid var(--line);border-radius:12px;background:var(--surface);color:var(--ink);font:13px/1.4 ui-monospace,Menlo,monospace;padding:10px}
+textarea.say{min-height:64px;font:400 17px/1.4 var(--body);padding:12px;resize:none}
+.unk{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:14px}
 @media (prefers-reduced-motion:no-preference){#sheet.open .panel:not(.dialog){animation:up .18s ease-out}}
 @keyframes up{from{transform:translateY(24px);opacity:.6}to{transform:none;opacity:1}}
 </style>
@@ -661,7 +663,8 @@ function vToday(){
   let h=`<div class="daynav"><button data-act="day" data-d="-1" aria-label="Poprzedni dzień">‹</button><div style="text-align:center"><h1>${isToday?'Dziś':cap(new Date(d0).toLocaleDateString('pl-PL',{weekday:'long'}))}</h1><small>${new Date(d0).toLocaleDateString('pl-PL',{day:'numeric',month:'long'})}</small></div><button data-act="day" data-d="1" aria-label="Następny dzień" ${isToday?'disabled':''}>›</button></div>`;
   h+=banners();
   if(active){const i=testInfo(active);h+=`<div class="banner info"><span><b>Test: ${active.kind==='elim'?'bez':'ponowne wprowadzenie'} · ${esc(active.label)}</b> · dzień ${i.dayNo} z ${active.len}${i.viol?` · <span style="color:var(--crit)">zjedzone ${i.viol}×</span>`:''}</span></div>`}
-  h+=`<div class="big2"><button class="btn primary" data-act="newMeal">+ Posiłek</button><button class="btn" data-act="newSym">+ Objaw</button></div>`;
+  h+=`<div class="card stack"><label for="say" class="lbl">Powiedz, co zjadłaś</label><textarea id="say" class="say" rows="2" placeholder="np. owsianka z bananem i herbata" enterkeyhint="done" autocomplete="off">${esc(UI.say||'')}</textarea><small>Stuknij pole, a potem ikonę mikrofonu na klawiaturze. Możesz dodać „na mieście” albo „godzinę temu”.</small><button class="btn primary" data-act="parseSay">Rozpoznaj posiłek</button></div>`;
+  h+=`<div class="big2"><button class="btn" data-act="newMeal">+ Posiłek z listy</button><button class="btn" data-act="newSym">+ Objaw</button></div>`;
   h+=`<button class="btn block" data-act="daySum" style="display:flex;justify-content:space-between;align-items:center;font-weight:500"><span>Podsumowanie dnia</span><span class="${ds?'pill ok':'muted'}">${ds?'wypełnione':'do wypełnienia'}</span></button>`;
   if(!list.length)h+=`<div class="empty">Brak wpisów z tego dnia.<br>Dodaj posiłek albo objaw przyciskami powyżej.</div>`;
   else h+=`<ul class="tl">`+list.map(e=>{
@@ -743,6 +746,7 @@ function sheetMeal(){
   const d=UI.d;const edit=!!d.id;
   let h=`<div class="row between"><h2>${edit?'Edytuj posiłek':'Posiłek'}</h2><button class="btn small ghost" data-act="closeSheet">Zamknij</button></div>${timeRow(d.t)}`;
   if(!edit&&S.favorites.length)h+=`<div class="field"><span class="lbl">Ulubione · jedno stuknięcie dodaje posiłek</span><div class="hscroll">${S.favorites.map(f=>`<button class="chip" data-act="addFav" data-id="${f.id}">${esc(f.name)}</button>`).join('')}</div></div>`;
+  if(d.said)h+=`<div class="banner info"><span>Usłyszane: „${esc(d.said)}”. Sprawdź listę i popraw ilości, jeśli trzeba.</span>${d.unknown&&d.unknown.length?`<div class="unk"><span>Nie rozpoznano:</span>${d.unknown.map(w=>`<button class="chip" data-act="seekWord" data-w="${esc(w)}">${esc(w)}</button>`).join('')}</div><small>Stuknij słowo, żeby je wyszukać albo dodać jako własny produkt.</small>`:''}</div>`;
   h+=`<div class="field"><span class="lbl">W tym posiłku</span><div class="items" id="items">${itemsHtml()}</div></div>
   <div class="field"><label for="q">Dodaj składnik</label><input type="search" id="q" placeholder="Szukaj, np. ryż, cebula, pizza" autocomplete="off" enterkeyhint="search"><div class="results" id="results">${resultsHtml('')}</div></div>
   <div id="newFood"></div>
@@ -781,13 +785,61 @@ function sheetDay(){const d=UI.d;const caf=S.meals.filter(m=>dayKey(m.t)===UI.da
 function confirmBox(title,msg,ok,act,danger){openSheet(`<h2>${title}</h2><p style="font-size:15px">${msg}</p><div class="row"><button class="btn grow" data-act="closeSheet">Anuluj</button><button class="btn ${danger?'danger':'primary'} grow" data-act="${act}">${ok}</button></div>`,true)}
 function toast(msg,btn,fn){const t=$('#toast');$('#toastMsg').textContent=msg;const b=$('#toastBtn');b.textContent=btn||'';b.style.display=btn?'':'none';b.onclick=()=>{t.classList.remove('show');fn&&fn()};t.classList.add('show');clearTimeout(toast.h);toast.h=setTimeout(()=>t.classList.remove('show'),btn?6000:2600)}
 
+/* ---------- dyktowanie ---------- */
+const SAY_STOP=new Set('z ze i oraz a w we na do po od dla o u przy nad pod to ten ta te tez takze jeszcze potem plus sobie sie mam mialam mialem jadlam jadlem pilam pilem zjadlam zjadlem wypilam wypilem bylo byla byl jakis jakas jakies okolo ktory ktora ktore teraz dzis dzisiaj rano wieczorem wczoraj temu malo mala male maly malej malym duzo duza duze duzy duzej duzym pol polowa polowe troche troszke odrobina odrobine jeden jedna jedno jednej dwa dwie trzy cztery kilka pare cala caly cale podwojna podwojny moze chyba tylko mi my mnie ja tego tej tym dwoch trzech dwoma kilku paru jednego jednym'.split(' '));
+const SAY_FILL=['sniadan','obiad','obiadu','kolacj','lunch','przekas','podwiecz','kromk','kawalek','kawalk','plaster','plastr','szklank','misk','misecz','porcj','lyzk','lyzecz','garsc','sztuk','godzin','minut','opakow','talerz','filizank','puszk','butelk','kieliszk','lampk','kufl','kubk','kubek','miesci','miasto','restaurac','wynos','knajp'];
+const SAY_ALIAS={owsianka:'płatki owsiane',owsianke:'płatki owsiane',banan:'banan dojrzały',herbata:'herbata czarna',ryz:'ryż biały',makaron:'makaron pszenny',mleko:'mleko krowie',jajko:'jajko gotowane',jaja:'jajko gotowane',jogurt:'jogurt naturalny',ser:'ser żółty',twarog:'ser biały (twaróg)',chleb:'chleb pszenny',bulka:'bułka pszenna',kurczak:'kurczak pieczony',kartofle:'ziemniaki',papryka:'papryka czerwona',fasola:'fasola biała',kasza:'kasza gryczana',kawa:'kawa',czekolada:'czekolada gorzka',wino:'wino czerwone',orzechy:'orzechy włoskie',tost:'chleb pszenny',grzanka:'chleb pszenny',grzanki:'chleb pszenny',decaf:'kawa bezkofeinowa',kanapka:'chleb pszenny',kanapki:'chleb pszenny',pieczywo:'chleb pszenny',bezkofeinowa:'kawa bezkofeinowa',bezkofeinowej:'kawa bezkofeinowa',ziemniak:'ziemniaki',frytki:'frytki',salatka:'sałatka z kurczakiem',zupa:'zupa pomidorowa',sok:'sok pomarańczowy'};
+const sayToks=s=>norm(s).replace(/\(.*?\)/g,' ').split(/[^a-z0-9]+/).filter(Boolean);
+function stemEq(a,b){if(a===b)return true;if(a==='bez'||b==='bez')return false;const m=Math.min(a.length,b.length);if(m<3)return false;let L=0;while(L<m&&a[L]===b[L])L++;return m>=5?L>=Math.max(4,m-2):L>=3}
+const lex=(a,b)=>{for(let i=0;i<a.length;i++)if(a[i]!==b[i])return a[i]-b[i];return 0};
+const isFill=t=>SAY_STOP.has(t)||/^\d/.test(t)||t.length<2||SAY_FILL.some(p=>t.startsWith(p));
+let sayIdx=null,sayRev=-1;
+function sayFoods(){const key=S.customFoods.length+'|'+S.favorites.map(f=>f.id+f.name).join();if(sayRev!==key){
+  sayIdx=[...S.favorites.map(f=>({fav:f,name:f.name})),...S.customFoods,...BUILTIN].map(f=>({f,toks:sayToks(f.name).filter(t=>!['z','ze','i','w','na','do','a'].includes(t))})).filter(x=>x.toks.length);sayRev=key}return sayIdx}
+function parseMeal(text){
+  const raw=text.trim(),n=norm(raw);const res={items:[],unknown:[],out:/\b(na miescie|w miescie|w restauracji|na wynos|w knajpie|w barze|w kawiarni|z dostawa)\b/.test(n),t:null};
+  let m=n.match(/\b(\d+(?:[.,]\d+)?|pol|jedna|dwie|dwa|trzy)?\s*(godzin\w*|minut\w*)\s+temu\b/);
+  if(m){const num={pol:.5,jedna:1,dwie:2,dwa:2,trzy:3}[m[1]]??(m[1]?parseFloat(m[1].replace(',','.')):1);const mins=m[2].startsWith('godzin')?(m[1]==='pol'?30:num*60):num;res.t=Date.now()-mins*60e3}
+  else if((m=n.match(/\bo (\d{1,2})(?:[:.](\d{2}))?\b/))&&+m[1]<24){const d=new Date(keyToDate(UI.day).getTime());d.setHours(+m[1],+(m[2]||0),0,0);if(d.getTime()<=Date.now()+5*60e3)res.t=d.getTime()}
+  const freq={};S.meals.forEach(x=>x.items.forEach(i=>freq[i.f]=(freq[i.f]||0)+1));
+  const add=(id,a)=>{const ex=res.items.find(i=>i.f===id);if(ex){if(a!==2)ex.a=a}else res.items.push({f:id,a})};
+  const foodsL=sayFoods(),byName=new Map(BUILTIN.map(f=>[f.name,f.id]));
+  const chunks=raw.split(/[,;.+\n]|\s(?:i|oraz|a|plus|potem|do tego|a do tego|a potem)\s/i);
+  for(const ch of chunks){
+    const words=ch.split(/\s+/).filter(Boolean).map(w=>({o:w.replace(/[^\p{L}\p{N}-]/gu,''),t:sayToks(w)[0]||''})).filter(w=>w.t);
+    const nt=words.map(w=>w.t);
+    let a=2;if(nt.some(t=>['malo','mala','male','maly','malej','malym','troche','troszke','odrobina','odrobine','pol','polowa','polowe'].includes(t)))a=1;else if(nt.some(t=>['duzo','duza','duze','duzy','duzej','duzym','podwojna','podwojny'].includes(t)))a=3;
+    const used=words.map(w=>isFill(w.t));
+    for(;;){let best=null;
+      for(const c of foodsL){if(!c.fav&&c.toks.length<2)continue;const pick=[];let exact=0,len=0;
+        for(const ft of c.toks){const j=words.findIndex((w,i)=>!used[i]&&!pick.includes(i)&&stemEq(w.t,ft));if(j<0){pick.length=0;break}pick.push(j);if(words[j].t===ft)exact++;len+=ft.length}
+        if(!pick.length)continue;const sc=[c.toks.length,c.fav?1:0,exact,len];
+        if(!best||lex(sc,best.sc)>0)best={c,pick,sc}}
+      if(!best)break;best.pick.forEach(i=>used[i]=true);
+      if(best.c.fav)best.c.fav.items.forEach(i=>add(i.f,a===2?i.a:a));else add(best.c.f.id,a)}
+    words.forEach((w,i)=>{if(!used[i]&&w.t==='bez'){used[i]=true;const k=words.findIndex((x,j)=>j>i&&!used[j]);if(k>=0)used[k]=true}});
+    words.forEach((w,i)=>{if(used[i])return;
+      let best=null;const al=Object.keys(SAY_ALIAS).find(k=>stemEq(w.t,k)),alId=al&&byName.get(SAY_ALIAS[al]);
+      for(const c of foodsL){if(c.fav||!stemEq(w.t,c.toks[0]))continue;const id=c.f.id;
+        const sc=[freq[id]||0,(c.toks.length===1&&w.t===c.toks[0])?1:0,id===alId?1:0,w.t===c.toks[0]?1:0,-c.toks.length,-c.f.name.length];
+        if(!best||lex(sc,best.sc)>0)best={id,sc}}
+      if(alId){const sc=[freq[alId]||0,0,1,0,0,0];if(!best||lex(sc,best.sc)>0)best={id:alId,sc}}
+      used[i]=true;if(best)add(best.id,a);else res.unknown.push(w.o)});
+  }
+  res.unknown=[...new Set(res.unknown)];return res;
+}
+
 /* ---------- akcje ---------- */
 function own(){if(S.sample){/* wpis do danych przykładowych jest dozwolony, zostaje oznaczenie */}}
 const A={
+  parseSay(){const el=$('#say'),txt=(el?el.value:UI.say||'').trim();if(!txt){if(el)el.focus();toast('Najpierw powiedz albo wpisz, co zjadłaś');return}
+    const r=parseMeal(txt);if(!r.items.length&&!r.unknown.length){toast('Nie rozpoznano produktów. Spróbuj inaczej.');return}
+    UI.sheet='meal';UI.d={t:r.t||defTime(),off:r.t?-1:0,items:r.items,out:r.out,name:'',fav:false,said:txt,unknown:r.unknown};openSheet(sheetMeal())},
+  seekWord(el){const q=$('#q');if(!q)return;q.value=el.dataset.w;$('#results').innerHTML=resultsHtml(q.value);el.remove();q.scrollIntoView({block:'center'})},
   closeSheet,
   day(el){const t=keyToDate(UI.day).getTime()+Number(el.dataset.d)*DAY+12*H;if(startOfDay(t)>startOfDay(Date.now()))return;UI.day=dayKey(t);render()},
   newMeal(){UI.sheet='meal';UI.d={t:defTime(),off:0,items:[],out:false,name:'',fav:false};openSheet(sheetMeal())},
-  editMeal(el){const m=S.meals.find(x=>x.id===el.dataset.id);if(!m)return;UI.sheet='meal';UI.d={id:m.id,t:m.t,items:m.items.map(i=>({...i})),out:!!m.out,name:m.name||''};openSheet(sheetMeal())},
+  editMeal(el){const m=S.meals.find(x=>x.id===el.dataset.id);if(!m)return;UI.sheet='meal';UI.d={id:m.id,t:m.t,items:m.items.map(i=>({...i})),out:!!m.out,name:m.name||'',keepSaid:m.said};openSheet(sheetMeal())},
   tOff(el){const m=Number(el.dataset.m);UI.d.off=m;UI.d.t=Date.now()-m*60e3;document.querySelectorAll('#panel [data-act=tOff]').forEach(b=>b.classList.toggle('on',Number(b.dataset.m)===m));$('#tIn').value=hm(UI.d.t)},
   addItem(el){UI.d.items.push({f:el.dataset.id,a:2});const q=$('#q');if(q)q.value='';refreshMeal()},
   rmItem(el){UI.d.items.splice(Number(el.dataset.n),1);refreshMeal()},
@@ -797,7 +849,7 @@ const A={
   nfSave(){const nf=UI.d.nf;const f={id:'c:'+uid(),name:nf.name.toLowerCase(),tags:nf.tags};S.customFoods.push(f);save();UI.d.items.push({f:f.id,a:2});UI.d.nf=null;$('#newFood').innerHTML='';$('#q').value='';refreshMeal()},
   nfCancel(){UI.d.nf=null;$('#newFood').innerHTML=''},
   addFav(el){const f=S.favorites.find(x=>x.id===el.dataset.id);if(!f)return;const m={id:uid(),t:Math.round(UI.d.t),name:f.name,items:f.items.map(i=>({...i})),out:false};S.meals.push(m);save();closeSheet();render();toast('Dodano: '+f.name,'Cofnij',()=>{S.meals=S.meals.filter(x=>x.id!==m.id);save();render()})},
-  saveMeal(){const d=UI.d;if(!d.items.length)return;const rec={id:d.id||uid(),t:Math.round(d.t),name:(d.name||'').trim(),items:d.items,out:d.out};
+  saveMeal(){const d=UI.d;if(!d.items.length)return;const rec={id:d.id||uid(),t:Math.round(d.t),name:(d.name||'').trim(),items:d.items,out:d.out};if(d.said){rec.said=d.said;UI.say=''}else if(d.keepSaid)rec.said=d.keepSaid;
     if(d.id)S.meals=S.meals.map(m=>m.id===d.id?rec:m);else S.meals.push(rec);
     if(d.fav){S.favorites.push({id:uid(),name:rec.name||cap(food(rec.items[0].f).name),items:rec.items.map(i=>({...i}))})}
     save();closeSheet();render();toast(d.id?'Zapisano zmiany':'Dodano posiłek')},
@@ -893,14 +945,15 @@ document.addEventListener('click',e=>{const el=e.target.closest('[data-act]');if
 document.addEventListener('input',e=>{const t=e.target;
   if(t.id==='q'){$('#results').innerHTML=resultsHtml(t.value)}
   else if(t.id==='sev'){UI.d.sev=Number(t.value);$('#sevOut').textContent=t.value}
-  else if(t.id==='mname'){UI.d.name=t.value}});
+  else if(t.id==='mname'){UI.d.name=t.value}
+  else if(t.id==='say'){UI.say=t.value}});
 document.addEventListener('change',e=>{const t=e.target,c=t.dataset&&t.dataset.chg;if(!c)return;
   if(c==='time'&&t.value){const [h,m]=t.value.split(':').map(Number);const base=UI.d.id?startOfDay(UI.d.t):keyToDate(UI.day).getTime();const d=new Date(base);d.setHours(h,m,0,0);UI.d.t=d.getTime();UI.d.off=-1;document.querySelectorAll('#panel [data-act=tOff]').forEach(b=>b.classList.remove('on'))}
   else if(c==='out')UI.d.out=t.checked;
   else if(c==='fav')UI.d.fav=t.checked;
   else if(c==='sevMin'){S.settings.sevMin=Number(t.value);save();toast('Zmieniono próg analizy')}});
 $('#importFile').addEventListener('change',e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>doImport(String(r.result));r.readAsText(f);e.target.value=''});
-document.addEventListener('keydown',e=>{if(e.key==='Escape'&&$('#sheet').classList.contains('open'))closeSheet()});
+document.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&e.target.id==='say'){e.preventDefault();e.target.blur();A.parseSay();return}if(e.key==='Escape'&&$('#sheet').classList.contains('open'))closeSheet()});
 function route(){const h=(location.hash||'#dzis').slice(1);UI.tab=['dzis','raport','testy','wiecej'].includes(h)?h:'dzis';render();$('#view').scrollTop=0}
 window.addEventListener('hashchange',route);
 route();
